@@ -344,7 +344,7 @@ def generate_fix(v):
     return (
         f'{PATCH_MARKER}'
         f'if(!{v["key_meta"]}.backspace&&!{v["key_meta"]}.delete&&{v["input"]}.includes("\\x7f")){{'
-        f'{v["state"]}={v["cur_state"]};'
+        f'let {v["state"]}={v["cur_state"]};'
         f'for(const _c of {v["input"]}){{'
         f'if(_c==="\\x7f"){v["state"]}={v["state"]}.backspace();'
         f'else {v["state"]}={v["state"]}.insert(_c);'
