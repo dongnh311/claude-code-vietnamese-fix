@@ -1,14 +1,14 @@
 #
 # Claude Code Vietnamese IME Fix - Installer (Windows)
-# Clone repo va tu dong chay fix
+# Clone repo va chay interactive menu
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/manhit96/claude-code-vietnamese-fix/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/dongnh311/claude-code-vietnamese-fix/main/install.ps1 | iex
 #
 
 $ErrorActionPreference = "Stop"
 
-$RepoUrl = "https://github.com/manhit96/claude-code-vietnamese-fix.git"
+$RepoUrl = "https://github.com/dongnh311/claude-code-vietnamese-fix.git"
 $InstallDir = Join-Path $env:USERPROFILE ".claude-vn-fix"
 
 Write-Host ""
@@ -48,19 +48,19 @@ if (Test-Path $InstallDir) {
     git clone --depth 1 $RepoUrl $InstallDir
 }
 Write-Host "   Done"
-
-# Run auto patch
 Write-Host ""
+
+# Run interactive menu
 Set-Location $InstallDir
-& $PythonCmd patcher.py --auto
+& $PythonCmd patcher.py
 
 Write-Host ""
 Write-Host "================================================"
-Write-Host "Hoan tat!" -ForegroundColor Green
-Write-Host "================================================"
-Write-Host ""
 Write-Host "Commands:"
-Write-Host "  Fix:     $PythonCmd $InstallDir\patcher.py"
+Write-Host "  Menu:    $PythonCmd $InstallDir\patcher.py"
+Write-Host "  Auto:    $PythonCmd $InstallDir\patcher.py --auto"
 Write-Host "  Restore: $PythonCmd $InstallDir\patcher.py --restore"
+Write-Host "  Scan:    $PythonCmd $InstallDir\patcher.py --scan"
 Write-Host "  Update:  cd $InstallDir; git pull"
+Write-Host "================================================"
 Write-Host ""

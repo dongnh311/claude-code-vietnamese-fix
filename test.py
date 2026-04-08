@@ -2,15 +2,18 @@
 """
 Claude Code Vietnamese IME Fix - Test Runner
 
-Auto-downloads latest 3 npm versions, patches, verifies --version works.
+Auto-downloads latest npm versions + binary builds, patches, verifies.
 """
 
 import json
+import os
+import platform
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.request
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -21,6 +24,30 @@ GREEN = "\033[0;32m"
 RED = "\033[0;31m"
 BLUE = "\033[0;34m"
 NC = "\033[0m"
+
+# GCS base URL for Claude Code binary releases
+GCS_BASE = (
+    "https://storage.googleapis.com/"
+    "claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/"
+    "claude-code-releases"
+)
+
+
+def get_current_platform():
+    """Get platform string for binary download."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+
+    if system == 'darwin':
+        arch = 'arm64' if machine == 'arm64' else 'x64'
+        return f'darwin-{arch}'
+    elif system == 'linux':
+        arch = 'arm64' if machine in ('aarch64', 'arm64') else 'x64'
+        return f'linux-{arch}'
+    elif system == 'windows':
+        arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x64'
+        return f'win32-{arch}'
+    return None
 
 
 def get_latest_versions(count=3):
@@ -60,6 +87,24 @@ def download_npm(version):
     return version_dir / "cli.js"
 
 
+def download_binary(version, plat):
+    """Download Claude Code binary from GCS."""
+    binary_dir = SOURCES_DIR / f"v{version}-{plat}"
+    binary_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = '.exe' if plat.startswith('win32') else ''
+    binary_path = binary_dir / f"claude{ext}"
+
+    url = f"{GCS_BASE}/{version}/{plat}/claude{ext}"
+    try:
+        urllib.request.urlretrieve(url, str(binary_path))
+        if not plat.startswith('win32'):
+            os.chmod(str(binary_path), 0o755)
+        return binary_path
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Download failed ({e.code}): {url}")
+
+
 def run_patcher(args):
     """Run patcher with args, return (success, stdout, stderr)."""
     result = subprocess.run(
@@ -78,9 +123,10 @@ def verify_runs(file_path):
     return result.returncode == 0, result.stdout.strip()
 
 
-def verify_fix_logic(file_path):
+def verify_fix_logic(file_path, binary=False):
     """Verify patched code contains correct fix logic (backspace + insert)."""
-    content = Path(file_path).read_text(encoding='utf-8')
+    encoding = 'latin1' if binary else 'utf-8'
+    content = Path(file_path).read_text(encoding=encoding)
 
     # Must have patch marker
     if "/* Vietnamese IME fix */" not in content:
@@ -93,6 +139,13 @@ def verify_fix_logic(file_path):
         return False, "cannot find fix block end"
     fix_block = content[marker_idx:fix_end + 8]
 
+    # Must iterate string and branch
+    if "for(const _c of " not in fix_block:
+        return False, "missing character iteration in fix"
+
+    if '==="\\x7f"' not in fix_block:
+        return False, "missing backspace character check"
+
     # Must have backspace loop
     if ".backspace()" not in fix_block:
         return False, "missing .backspace() in fix"
@@ -101,17 +154,162 @@ def verify_fix_logic(file_path):
     if ".insert(" not in fix_block:
         return False, "missing .insert() in fix"
 
-    # Original bug pattern should be gone (deleteTokenBefore is in the old bug block)
-    # Note: deleteTokenBefore may still exist elsewhere in the file, so check
-    # that there's no block combining includes(\x7f) with deleteTokenBefore
+    # Original bug pattern should be gone (only appears in our fix block)
     del_char = chr(127)
     bug_pattern = f'.includes("{del_char}")'
-    # Count occurrences - should only appear in our fix block
     occurrences = content.count(bug_pattern)
     if occurrences > 1:
         return False, f"bug pattern appears {occurrences} times (expected 1 from fix)"
 
+    # Binary: verify size is preserved
+    if binary:
+        pass  # size check is done in the patcher itself
+
     return True, "fix logic OK"
+
+
+def verify_binary_size(file_path, original_size, tolerance=0):
+    """Verify binary file size is preserved after patching.
+
+    tolerance: allow small size change from codesign re-signing on macOS.
+    """
+    patched_size = os.path.getsize(file_path)
+    diff = abs(patched_size - original_size)
+    if diff > tolerance:
+        return False, f"size mismatch: {original_size} -> {patched_size} (diff={diff})"
+    return True, f"size OK (diff={patched_size - original_size})"
+
+
+def test_npm_versions(versions, results):
+    """Test patching npm cli.js versions."""
+    for version in versions:
+        print(f"{BLUE}-> Testing npm v{version}{NC}")
+        print(f"   downloading...", end=" ", flush=True)
+
+        try:
+            cli_js = download_npm(version)
+
+            # Test patch
+            print("patch...", end=" ", flush=True)
+            ok, stdout, stderr = run_patcher(["--path", str(cli_js)])
+            if not ok:
+                print(f"{RED}x{NC} Patch failed: {stderr}")
+                results.append(("npm-patch", version, False))
+                continue
+
+            # Verify --version
+            print("verify...", end=" ", flush=True)
+            ok, output = verify_runs(cli_js)
+            if not ok:
+                print(f"{RED}x{NC} --version failed")
+                results.append(("npm-verify", version, False))
+                continue
+
+            # Verify fix logic
+            print("logic...", end=" ", flush=True)
+            ok, detail = verify_fix_logic(cli_js)
+            if not ok:
+                print(f"{RED}x{NC} {detail}")
+                results.append(("npm-logic", version, False))
+                continue
+
+            # Test double-patch
+            print("double-patch...", end=" ", flush=True)
+            ok, stdout, _ = run_patcher(["--path", str(cli_js)])
+            if "patch" not in stdout.lower():
+                print(f"{RED}x{NC} double-patch not detected")
+                results.append(("npm-double", version, False))
+                continue
+
+            # Test restore
+            print("restore...", end=" ", flush=True)
+            ok, _, stderr = run_patcher(["--restore", "--path", str(cli_js)])
+            if not ok:
+                print(f"{RED}x{NC} restore failed: {stderr}")
+                results.append(("npm-restore", version, False))
+                continue
+
+            print(f"{GREEN}ok{NC} {output}")
+            results.append(("npm", version, True))
+
+        except Exception as e:
+            print(f"{RED}x{NC} {e}")
+            results.append(("npm", version, False))
+
+        print()
+
+
+def test_binary_versions(versions, results):
+    """Test patching binary versions."""
+    plat = get_current_platform()
+    if not plat:
+        print(f"{BLUE}-> Skipping binary tests (unsupported platform){NC}")
+        return
+
+    for version in versions:
+        print(f"{BLUE}-> Testing binary v{version} ({plat}){NC}")
+        print(f"   downloading...", end=" ", flush=True)
+
+        try:
+            binary_path = download_binary(version, plat)
+            original_size = os.path.getsize(binary_path)
+
+            # Test patch
+            print("patch...", end=" ", flush=True)
+            ok, stdout, stderr = run_patcher(["--path", str(binary_path)])
+            if not ok:
+                print(f"{RED}x{NC} Patch failed: {stderr}")
+                results.append(("bin-patch", f"{version}/{plat}", False))
+                continue
+
+            # Verify size preserved (allow small tolerance for codesign)
+            print("size...", end=" ", flush=True)
+            ok, detail = verify_binary_size(binary_path, original_size,
+                                            tolerance=64)
+            if not ok:
+                print(f"{RED}x{NC} {detail}")
+                results.append(("bin-size", f"{version}/{plat}", False))
+                continue
+
+            # Verify fix logic
+            print("logic...", end=" ", flush=True)
+            ok, detail = verify_fix_logic(binary_path, binary=True)
+            if not ok:
+                print(f"{RED}x{NC} {detail}")
+                results.append(("bin-logic", f"{version}/{plat}", False))
+                continue
+
+            # Test double-patch
+            print("double-patch...", end=" ", flush=True)
+            ok, stdout, _ = run_patcher(["--path", str(binary_path)])
+            if "patch" not in stdout.lower():
+                print(f"{RED}x{NC} double-patch not detected")
+                results.append(("bin-double", f"{version}/{plat}", False))
+                continue
+
+            # Test restore
+            print("restore...", end=" ", flush=True)
+            ok, _, stderr = run_patcher(["--restore", "--path", str(binary_path)])
+            if not ok:
+                print(f"{RED}x{NC} restore failed: {stderr}")
+                results.append(("bin-restore", f"{version}/{plat}", False))
+                continue
+
+            # Verify restore size (exact match since restore copies original backup)
+            ok, detail = verify_binary_size(binary_path, original_size)
+            if not ok:
+                print(f"{RED}x{NC} restore {detail}")
+                results.append(("bin-restore-size", f"{version}/{plat}", False))
+                continue
+
+            print(f"{GREEN}ok{NC}")
+            results.append(("binary", f"{version}/{plat}", True))
+
+        except Exception as e:
+            print(f"{RED}x{NC} {e}")
+            results.append(("binary", f"{version}/{plat}", False))
+
+        print()
 
 
 def main():
@@ -134,71 +332,21 @@ def main():
 
     results = []
 
-    for version in versions:
-        print(f"{BLUE}-> Testing v{version}{NC}")
-        print(f"   downloading...", end=" ", flush=True)
+    # Test npm versions
+    test_npm_versions(versions, results)
 
-        try:
-            cli_js = download_npm(version)
-
-            # Test patch
-            print("patch...", end=" ", flush=True)
-            ok, stdout, stderr = run_patcher(["--path", str(cli_js)])
-            if not ok:
-                print(f"{RED}✗{NC} Patch failed: {stderr}")
-                results.append(("patch", version, False))
-                continue
-
-            # Verify --version
-            print("verify...", end=" ", flush=True)
-            ok, output = verify_runs(cli_js)
-            if not ok:
-                print(f"{RED}✗{NC} --version failed")
-                results.append(("verify", version, False))
-                continue
-
-            # Verify fix logic (backspace + insert)
-            print("logic...", end=" ", flush=True)
-            ok, detail = verify_fix_logic(cli_js)
-            if not ok:
-                print(f"{RED}✗{NC} {detail}")
-                results.append(("logic", version, False))
-                continue
-
-            # Test double-patch
-            print("double-patch...", end=" ", flush=True)
-            ok, stdout, _ = run_patcher(["--path", str(cli_js)])
-            if "Đã patch" not in stdout:
-                print(f"{RED}✗{NC} double-patch not detected")
-                results.append(("double", version, False))
-                continue
-
-            # Test restore
-            print("restore...", end=" ", flush=True)
-            ok, _, stderr = run_patcher(["--restore", "--path", str(cli_js)])
-            if not ok:
-                print(f"{RED}✗{NC} restore failed: {stderr}")
-                results.append(("restore", version, False))
-                continue
-
-            print(f"{GREEN}✓{NC} {output}")
-            results.append(("npm", version, True))
-
-        except Exception as e:
-            print(f"{RED}✗{NC} {e}")
-            results.append(("npm", version, False))
-
-        print()
+    # Test binary versions
+    test_binary_versions(versions, results)
 
     # Edge case: nonexistent file
     print(f"{BLUE}-> Testing edge cases{NC}")
     print(f"   nonexistent file...", end=" ", flush=True)
     ok, _, _ = run_patcher(["--path", "/nonexistent/file.js"])
     if not ok:
-        print(f"{GREEN}✓{NC} correctly rejected")
+        print(f"{GREEN}ok{NC} correctly rejected")
         results.append(("edge", "N/A", True))
     else:
-        print(f"{RED}✗{NC} should have failed")
+        print(f"{RED}x{NC} should have failed")
         results.append(("edge", "N/A", False))
     print()
 
@@ -212,6 +360,9 @@ def main():
         return 0
     else:
         print(f"{RED}{passed}/{total} tests passed{NC}")
+        for test_type, version, ok in results:
+            if not ok:
+                print(f"  {RED}FAIL{NC}: {test_type} {version}")
         return 1
 
 

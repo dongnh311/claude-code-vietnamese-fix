@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
 # Claude Code Vietnamese IME Fix - Installer
-# Clone repo và tự động chạy fix
+# Clone repo va chay interactive menu
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/manhit96/claude-code-vietnamese-fix/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dongnh311/claude-code-vietnamese-fix/main/install.sh | bash
 #
 
 set -euo pipefail
 
-REPO_URL="https://github.com/manhit96/claude-code-vietnamese-fix.git"
+REPO_URL="https://github.com/dongnh311/claude-code-vietnamese-fix.git"
 INSTALL_DIR="$HOME/.claude-vn-fix"
 
 echo ""
@@ -18,8 +18,8 @@ echo ""
 
 # Check git
 if ! command -v git &> /dev/null; then
-    echo "[ERROR] git không tìm thấy"
-    echo "Cài đặt: https://git-scm.com/downloads"
+    echo "[ERROR] git khong tim thay"
+    echo "Cai dat: https://git-scm.com/downloads"
     exit 1
 fi
 
@@ -33,13 +33,13 @@ for cmd in python3 python; do
 done
 
 if [ -z "$PYTHON_CMD" ]; then
-    echo "[ERROR] Python không tìm thấy"
-    echo "Cài đặt: https://python.org/downloads"
+    echo "[ERROR] Python khong tim thay"
+    echo "Cai dat: https://python.org/downloads"
     exit 1
 fi
 
 # Clone or update
-echo "-> Cài đặt vào $INSTALL_DIR..."
+echo "-> Cai dat vao $INSTALL_DIR..."
 if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR"
     git pull origin main 2>/dev/null || true
@@ -47,19 +47,19 @@ else
     git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 echo "   Done"
-
-# Run auto patch
 echo ""
+
+# Run interactive menu (stdin from terminal for piped install)
 cd "$INSTALL_DIR"
-"$PYTHON_CMD" patcher.py --auto
+"$PYTHON_CMD" patcher.py < /dev/tty
 
 echo ""
 echo "================================================"
-echo "Hoàn tất!"
-echo "================================================"
-echo ""
 echo "Commands:"
-echo "  Fix:     $PYTHON_CMD $INSTALL_DIR/patcher.py"
+echo "  Menu:    $PYTHON_CMD $INSTALL_DIR/patcher.py"
+echo "  Auto:    $PYTHON_CMD $INSTALL_DIR/patcher.py --auto"
 echo "  Restore: $PYTHON_CMD $INSTALL_DIR/patcher.py --restore"
+echo "  Scan:    $PYTHON_CMD $INSTALL_DIR/patcher.py --scan"
 echo "  Update:  cd $INSTALL_DIR && git pull"
+echo "================================================"
 echo ""
