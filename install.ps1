@@ -43,6 +43,12 @@ if (-not $PythonCmd) {
 Write-Host "-> Cai dat vao $InstallDir..."
 if (Test-Path $InstallDir) {
     Set-Location $InstallDir
+    # Update remote URL if it changed (e.g. fork migration)
+    $CurrentUrl = git remote get-url origin 2>$null
+    if ($CurrentUrl -ne $RepoUrl) {
+        Write-Host "   Updating remote: $RepoUrl"
+        git remote set-url origin $RepoUrl
+    }
     try { git pull origin main 2>&1 | Out-Null } catch {}
 } else {
     git clone --depth 1 $RepoUrl $InstallDir

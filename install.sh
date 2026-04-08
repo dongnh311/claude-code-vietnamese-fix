@@ -42,6 +42,12 @@ fi
 echo "-> Cai dat vao $INSTALL_DIR..."
 if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR"
+    # Update remote URL if it changed (e.g. fork migration)
+    CURRENT_URL=$(git remote get-url origin 2>/dev/null || echo "")
+    if [ "$CURRENT_URL" != "$REPO_URL" ]; then
+        echo "   Updating remote: $REPO_URL"
+        git remote set-url origin "$REPO_URL"
+    fi
     git pull origin main 2>/dev/null || true
 else
     git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
